@@ -20,7 +20,7 @@ carpet,data/mvtec_ad/carpet/test/color/017.png,color,1,data/mvtec_ad/carpet/grou
 carpet,data/mvtec_ad/carpet/test/color/018.png,color,1,data/mvtec_ad/carpet/ground_truth/color/018_mask.png,train
 carpet,data/mvtec_ad/carpet/test/cut/000.png,cut,1,data/mvtec_ad/carpet/ground_truth/cut/000_mask.png,heldout
 carpet,data/mvtec_ad/carpet/test/cut/001.png,cut,1,data/mvtec_ad/carpet/ground_truth/cut/001_mask.png,heldout
-carpet,data/mvtec_ad/carpet/test/cut/002.png,cut,1,data/mvtec_ad/carpet/ground_truth/cut/002_mask.png,train
+carpet,data/mvtec_ad/carpet/test/cut/002.png,cut,1,data/mvtec_ad/carpet/ground_truth/cut/002_mask.png,val
 carpet,data/mvtec_ad/carpet/test/cut/003.png,cut,1,data/mvtec_ad/carpet/ground_truth/cut/003_mask.png,train
 carpet,data/mvtec_ad/carpet/test/cut/004.png,cut,1,data/mvtec_ad/carpet/ground_truth/cut/004_mask.png,heldout
 carpet,data/mvtec_ad/carpet/test/cut/005.png,cut,1,data/mvtec_ad/carpet/ground_truth/cut/005_mask.png,heldout
@@ -80,7 +80,7 @@ carpet,data/mvtec_ad/carpet/test/hole/013.png,hole,1,data/mvtec_ad/carpet/ground
 carpet,data/mvtec_ad/carpet/test/hole/014.png,hole,1,data/mvtec_ad/carpet/ground_truth/hole/014_mask.png,heldout
 carpet,data/mvtec_ad/carpet/test/hole/015.png,hole,1,data/mvtec_ad/carpet/ground_truth/hole/015_mask.png,val
 carpet,data/mvtec_ad/carpet/test/hole/016.png,hole,1,data/mvtec_ad/carpet/ground_truth/hole/016_mask.png,train
-carpet,data/mvtec_ad/carpet/test/metal_contamination/000.png,metal_contamination,1,data/mvtec_ad/carpet/ground_truth/metal_contamination/000_mask.png,val
+carpet,data/mvtec_ad/carpet/test/metal_contamination/000.png,metal_contamination,1,data/mvtec_ad/carpet/ground_truth/metal_contamination/000_mask.png,train
 carpet,data/mvtec_ad/carpet/test/metal_contamination/001.png,metal_contamination,1,data/mvtec_ad/carpet/ground_truth/metal_contamination/001_mask.png,heldout
 carpet,data/mvtec_ad/carpet/test/metal_contamination/002.png,metal_contamination,1,data/mvtec_ad/carpet/ground_truth/metal_contamination/002_mask.png,train
 carpet,data/mvtec_ad/carpet/test/metal_contamination/003.png,metal_contamination,1,data/mvtec_ad/carpet/ground_truth/metal_contamination/003_mask.png,heldout
