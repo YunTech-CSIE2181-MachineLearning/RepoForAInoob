@@ -1,5 +1,5 @@
 category,path,defect_type,label,mask,split
-transistor,data/mvtec_ad/transistor/test/bent_lead/000.png,bent_lead,1,data/mvtec_ad/transistor/ground_truth/bent_lead/000_mask.png,train
+transistor,data/mvtec_ad/transistor/test/bent_lead/000.png,bent_lead,1,data/mvtec_ad/transistor/ground_truth/bent_lead/000_mask.png,val
 transistor,data/mvtec_ad/transistor/test/bent_lead/001.png,bent_lead,1,data/mvtec_ad/transistor/ground_truth/bent_lead/001_mask.png,train
 transistor,data/mvtec_ad/transistor/test/bent_lead/002.png,bent_lead,1,data/mvtec_ad/transistor/ground_truth/bent_lead/002_mask.png,heldout
 transistor,data/mvtec_ad/transistor/test/bent_lead/003.png,bent_lead,1,data/mvtec_ad/transistor/ground_truth/bent_lead/003_mask.png,heldout
@@ -10,7 +10,7 @@ transistor,data/mvtec_ad/transistor/test/bent_lead/007.png,bent_lead,1,data/mvte
 transistor,data/mvtec_ad/transistor/test/bent_lead/008.png,bent_lead,1,data/mvtec_ad/transistor/ground_truth/bent_lead/008_mask.png,train
 transistor,data/mvtec_ad/transistor/test/bent_lead/009.png,bent_lead,1,data/mvtec_ad/transistor/ground_truth/bent_lead/009_mask.png,heldout
 transistor,data/mvtec_ad/transistor/test/cut_lead/000.png,cut_lead,1,data/mvtec_ad/transistor/ground_truth/cut_lead/000_mask.png,train
-transistor,data/mvtec_ad/transistor/test/cut_lead/001.png,cut_lead,1,data/mvtec_ad/transistor/ground_truth/cut_lead/001_mask.png,val
+transistor,data/mvtec_ad/transistor/test/cut_lead/001.png,cut_lead,1,data/mvtec_ad/transistor/ground_truth/cut_lead/001_mask.png,train
 transistor,data/mvtec_ad/transistor/test/cut_lead/002.png,cut_lead,1,data/mvtec_ad/transistor/ground_truth/cut_lead/002_mask.png,heldout
 transistor,data/mvtec_ad/transistor/test/cut_lead/003.png,cut_lead,1,data/mvtec_ad/transistor/ground_truth/cut_lead/003_mask.png,train
 transistor,data/mvtec_ad/transistor/test/cut_lead/004.png,cut_lead,1,data/mvtec_ad/transistor/ground_truth/cut_lead/004_mask.png,heldout
@@ -19,7 +19,7 @@ transistor,data/mvtec_ad/transistor/test/cut_lead/006.png,cut_lead,1,data/mvtec_
 transistor,data/mvtec_ad/transistor/test/cut_lead/007.png,cut_lead,1,data/mvtec_ad/transistor/ground_truth/cut_lead/007_mask.png,heldout
 transistor,data/mvtec_ad/transistor/test/cut_lead/008.png,cut_lead,1,data/mvtec_ad/transistor/ground_truth/cut_lead/008_mask.png,val
 transistor,data/mvtec_ad/transistor/test/cut_lead/009.png,cut_lead,1,data/mvtec_ad/transistor/ground_truth/cut_lead/009_mask.png,heldout
-transistor,data/mvtec_ad/transistor/test/damaged_case/000.png,damaged_case,1,data/mvtec_ad/transistor/ground_truth/damaged_case/000_mask.png,train
+transistor,data/mvtec_ad/transistor/test/damaged_case/000.png,damaged_case,1,data/mvtec_ad/transistor/ground_truth/damaged_case/000_mask.png,val
 transistor,data/mvtec_ad/transistor/test/damaged_case/001.png,damaged_case,1,data/mvtec_ad/transistor/ground_truth/damaged_case/001_mask.png,heldout
 transistor,data/mvtec_ad/transistor/test/damaged_case/002.png,damaged_case,1,data/mvtec_ad/transistor/ground_truth/damaged_case/002_mask.png,train
 transistor,data/mvtec_ad/transistor/test/damaged_case/003.png,damaged_case,1,data/mvtec_ad/transistor/ground_truth/damaged_case/003_mask.png,heldout
@@ -89,7 +89,7 @@ transistor,data/mvtec_ad/transistor/test/good/056.png,good,0,,heldout
 transistor,data/mvtec_ad/transistor/test/good/057.png,good,0,,heldout
 transistor,data/mvtec_ad/transistor/test/good/058.png,good,0,,train
 transistor,data/mvtec_ad/transistor/test/good/059.png,good,0,,train
-transistor,data/mvtec_ad/transistor/test/misplaced/000.png,misplaced,1,data/mvtec_ad/transistor/ground_truth/misplaced/000_mask.png,val
+transistor,data/mvtec_ad/transistor/test/misplaced/000.png,misplaced,1,data/mvtec_ad/transistor/ground_truth/misplaced/000_mask.png,train
 transistor,data/mvtec_ad/transistor/test/misplaced/001.png,misplaced,1,data/mvtec_ad/transistor/ground_truth/misplaced/001_mask.png,heldout
 transistor,data/mvtec_ad/transistor/test/misplaced/002.png,misplaced,1,data/mvtec_ad/transistor/ground_truth/misplaced/002_mask.png,val
 transistor,data/mvtec_ad/transistor/test/misplaced/003.png,misplaced,1,data/mvtec_ad/transistor/ground_truth/misplaced/003_mask.png,train
