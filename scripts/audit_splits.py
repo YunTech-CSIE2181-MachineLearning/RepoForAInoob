@@ -78,7 +78,7 @@ def audit(category, threshold, max_pairs):
          if x[1] != y[1] and (x[2] ^ y[2]).bit_count() <= threshold]
     )
 
-    print(f"\\n{category}: train={len(train)}, val={len(val)}, heldout={counters['heldout']} (not opened)")
+    print(f"\n{category}: train={len(train)}, val={len(val)}, heldout={counters['heldout']} (not opened)")
     print(f"  Train/Val exact SHA-256 duplicate pairs: {len(exact)}")
     for p, q in exact[:max_pairs]:
         print(f"    EXACT {p} <-> {q}")
@@ -99,7 +99,7 @@ def main():
         p.error("invalid distance or pair limit")
 
     count = sum(audit(c, args.near_threshold, args.max_pairs) for c in CATEGORIES)
-    print(f"\\nTotal cross-split exact duplicate pairs: {count}")
+    print(f"\nTotal cross-split exact duplicate pairs: {count}")
     print("Held-out image contents were not read. Dataset splits were not changed.")
     if count:
         raise SystemExit("WARNING: exact train/val duplicates found; inspect before interpreting AUROC")
