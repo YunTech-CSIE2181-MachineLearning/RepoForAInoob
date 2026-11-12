@@ -1,0 +1,16 @@
+# Python environment (recreate with: uv sync)
+.venv/
+__pycache__/
+.ipynb_checkpoints/
+
+# Dataset: never commit (about 5 GB, CC BY-NC-SA 4.0 licence)
+data/
+*.tar.xz
+
+# Model weights (GitHub blocks files over 100 MB)
+*.pt
+*.pth
+*.ckpt
+
+# Secrets
+.env
