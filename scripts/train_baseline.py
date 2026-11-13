@@ -217,7 +217,7 @@ def main():
         raise RuntimeError("CUDA GPU not available; refusing slow CPU training")
     device = torch.device("cuda")
     print(f"Device: {torch.cuda.get_device_name(0)}", flush=True)
-    modes = ["scratch", "pretrained"] if args.mode == "both" else [args.mode]
+    modes = ["scratch", "finetune"] if args.mode == "both" else [args.mode]
     for mode in modes:
         for category in args.categories:
             train(category, mode, args.seed, args.epochs, args.batch_size,
