@@ -1,9 +1,12 @@
-"""Week 11 Track A baselines: scratch and ImageNet-pretrained ResNet-18.
+"""Week 11 Track A: Scratch, Frozen Features, Full Fine-tuning ResNet-18.
 
-No augmentation; NEVER reads held-out images. Invoke from repository root:
-    uv run python scripts/train_baseline.py --mode scratch
-    uv run python scripts/train_baseline.py --mode pretrained
-    uv run python scripts/train_baseline.py --mode both
+No augmentation; NEVER opens held-out images. Run from repository root:
+    uv run python scripts/train_baseline.py --mode frozen --seed 0
+    uv run python scripts/train_baseline.py --mode frozen --seed 1
+    uv run python scripts/train_baseline.py --mode frozen --seed 2
+
+Modes: scratch, frozen, finetune, both (scratch + finetune), all.
+'pretrained' is a backward-compatible alias for 'finetune'.
 """
 import argparse
 import csv
@@ -117,11 +120,24 @@ def train(category, mode, seed, epochs, batch_size, device, resume):
     status_file = out / "status.json"
     log_file = out / "history.csv"
 
-    weights = models.ResNet18_Weights.IMAGENET1K_V1 if mode == "pretrained" else None
+    # Frozen and fine-tuning both start with ImageNet-pretrained backbone weights.
+    weights = models.ResNet18_Weights.IMAGENET1K_V1 if mode in ("frozen", "finetune") else None
     model = models.resnet18(weights=weights)
     model.fc = nn.Linear(model.fc.in_features, 2)
+    if mode == "frozen":
+        # Only the new 2-class classification head can update.
+        for name, param in model.named_parameters():
+            param.requires_grad_(name.startswith("fc."))
+        trainable_names = {name for name, p in model.named_parameters() if p.requires_grad}
+        assert trainable_names == {"fc.weight", "fc.bias"}, trainable_names
     model.to(device)
-    optimizer = torch.optim.Adam(model.parameters(), lr=1e-4)
+    trainable_params = [p for p in model.parameters() if p.requires_grad]
+    n_trainable = sum(p.numel() for p in trainable_params)
+    n_total = sum(p.numel() for p in model.parameters())
+    if mode == "frozen":
+        assert n_trainable == 1026, f"Unexpected frozen head size: {n_trainable}"
+    print(f"{run_id}: trainable={n_trainable:,} / total={n_total:,} parameters", flush=True)
+    optimizer = torch.optim.Adam(trainable_params, lr=1e-4)
     criterion = nn.CrossEntropyLoss()
     train_loader = DataLoader(ImageSet(groups["train"]), batch_size=batch_size,
                               shuffle=True, num_workers=0)
@@ -132,7 +148,9 @@ def train(category, mode, seed, epochs, batch_size, device, resume):
     history = []
     if resume and progress_file.is_file():
         state = torch.load(progress_file, map_location=device, weights_only=False)
-        if (state["category"], state["mode"], state["seed"],
+        # Existing fine-tuning checkpoints were saved as mode='pretrained'.
+        saved_mode = "finetune" if state["mode"] == "pretrained" else state["mode"]
+        if (state["category"], saved_mode, state["seed"],
                 state["epochs"], state["batch_size"]) != (
                 category, mode, seed, epochs, batch_size):
             raise ValueError(f"Incompatible checkpoint: {progress_file}")
@@ -157,6 +175,13 @@ def train(category, mode, seed, epochs, batch_size, device, resume):
     for epoch in range(start, epochs + 1):
         t0 = time.time()
         model.train()
+        if mode == "frozen":
+            # Freezing gradients alone does NOT freeze BatchNorm running statistics.
+            # Keep the pretrained backbone in eval mode; the new fc head still trains.
+            model.eval()
+            model.fc.train()
+            assert all(not layer.training for layer in model.modules()
+                       if isinstance(layer, nn.modules.batchnorm._BatchNorm))
         loss_sum = 0.0
         for x, y in train_loader:
             x, y = x.to(device), y.to(device)
@@ -194,7 +219,9 @@ def train(category, mode, seed, epochs, batch_size, device, resume):
             train_count=len(groups["train"]), val_count=len(groups["val"]),
             git_commit=git_hash(), device=str(device), elapsed_epoch_seconds=row["seconds"],
             optimizer="Adam", lr=1e-4, image_size=224, batch_size=batch_size,
-            split_seed=42, augmentation="none"))
+            split_seed=42, augmentation="none",
+            trainable_parameters=n_trainable, total_parameters=n_total,
+            backbone_frozen=(mode == "frozen")))
         print(f"{run_id} epoch {epoch:02d}/{epochs} | "
               f"train loss {row['train_loss']:.4f} | val loss {val_loss:.4f} | "
               f"val AUROC {val_auc:.4f} | best {best_auc:.4f} | {row['seconds']}s",
@@ -204,7 +231,9 @@ def train(category, mode, seed, epochs, batch_size, device, resume):
 
 def main():
     p = argparse.ArgumentParser(description=__doc__)
-    p.add_argument("--mode", choices=("scratch", "pretrained", "both"), default="scratch")
+    p.add_argument("--mode",
+                   choices=("scratch", "frozen", "finetune", "pretrained", "both", "all"),
+                   default="scratch")
     p.add_argument("--categories", nargs="+", choices=CATEGORIES, default=list(CATEGORIES))
     p.add_argument("--seed", type=int, default=0)
     p.add_argument("--epochs", type=int, default=30)
@@ -217,7 +246,12 @@ def main():
         raise RuntimeError("CUDA GPU not available; refusing slow CPU training")
     device = torch.device("cuda")
     print(f"Device: {torch.cuda.get_device_name(0)}", flush=True)
-    modes = ["scratch", "finetune"] if args.mode == "both" else [args.mode]
+    if args.mode == "both":
+        modes = ["scratch", "finetune"]
+    elif args.mode == "all":
+        modes = ["scratch", "frozen", "finetune"]
+    else:
+        modes = ["finetune" if args.mode == "pretrained" else args.mode]
     for mode in modes:
         for category in args.categories:
             train(category, mode, args.seed, args.epochs, args.batch_size,
