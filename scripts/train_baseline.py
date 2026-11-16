@@ -56,8 +56,8 @@ def build_transform(aug="none", train=True, size=IMG_SIZE):
     return T.Compose([T.Resize((size, size)), *pil_ops,
                       T.ToTensor(), T.Normalize(IMAGENET_MEAN, IMAGENET_STD), *tensor_ops])
 
-# Track A transfer strategies, following Topic 10's mode interpretation.
-# LR remains fixed at 1e-4 to preserve the existing experiment configuration.
+# Exact mode-specific learning rates from Topic 10's transfer strategy comparison.
+# This intentionally changes the previous fixed-LR protocol; old outputs are kept.
 MODES = {
     #                pretrained, train_backbone, backbone_lr, head_lr
     "scratch":        (False, True,  1e-3, 1e-3),
@@ -168,19 +168,6 @@ def write_json_atomic(path, obj):
     tmp = path.with_suffix(path.suffix + ".tmp")
     tmp.write_text(json.dumps(obj, indent=2, ensure_ascii=False), encoding="utf-8")
     os.replace(tmp, path)
-
-
-@torch.no_grad()
-def validate(model, loader, criterion, device):
-    model.eval()
-    scores, labels, total_loss = [], [], 0.0
-    for images, targets in loader:
-        images, targets = images.to(device), targets.to(device)
-        logits = model(images)
-        total_loss += criterion(logits, targets).item() * len(targets)
-        scores.extend(torch.softmax(logits, dim=1)[:, 1].cpu().tolist())
-        labels.extend(targets.cpu().tolist())
-    return total_loss / len(loader.dataset), float(roc_auc_score(labels, scores))
 
 
 def train(category, mode, seed, epochs, batch_size, device, resume):
