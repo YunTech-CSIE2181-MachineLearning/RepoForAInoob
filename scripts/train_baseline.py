@@ -1,12 +1,19 @@
-"""Week 11 Track A: Scratch, Frozen Features, Full Fine-tuning ResNet-18.
+"""Reproduce Topic 10's training protocol for 3 categories x 3 modes x 3 seeds.
 
-No augmentation; NEVER opens held-out images. Run from repository root:
-    uv run python scripts/train_baseline.py --mode frozen --seed 0
-    uv run python scripts/train_baseline.py --mode frozen --seed 1
-    uv run python scripts/train_baseline.py --mode frozen --seed 2
+Based on notebooks/Topic10_Transfer_Learning_MVTecAD.ipynb:
+- AdamW + cosine LR, class-weighted training loss, validation-loss early stopping;
+- mode-specific backbone/head learning rates, independent shuffled DataLoader seed;
+- cached bilinear 256px images, ResNet-18, no augmentation.
+Adaptations: Track A held-out isolation, resumable checkpoints, reproducible logs,
+and a SEPARATE outputs_topic10/ directory so old results are not overwritten.
 
-Modes: scratch, frozen, finetune, both (scratch + finetune), all.
-'pretrained' is a backward-compatible alias for 'finetune'.
+Prepare the new splits before training:
+    uv run python scripts/prepare_splits.py
+
+Run 27 models:
+    uv run python scripts/train_baseline.py --mode all --seed 0
+    uv run python scripts/train_baseline.py --mode all --seed 1
+    uv run python scripts/train_baseline.py --mode all --seed 2
 """
 import argparse
 import csv
@@ -21,12 +28,18 @@ import numpy as np
 import torch
 from PIL import Image
 from sklearn.metrics import roc_auc_score
+import torch.nn.functional as F
 from torch import nn
 from torch.utils.data import DataLoader, Dataset
 from torchvision import models, transforms as T
 
 ROOT = Path(__file__).resolve().parent.parent
 CATEGORIES = ("carpet", "bottle", "transistor")
+SPLIT_SEED = 42
+CACHE_SIZE = 256
+PATIENCE = 6
+WEIGHT_DECAY = 0.05
+PROTOCOL = "topic10-adamw-cosine-weighted-loss-earlystop-v1"
 # Same ImageNet normalization and baseline (no-augmentation) transform as Topic 10.
 IMG_SIZE = 224
 IMAGENET_MEAN = [0.485, 0.456, 0.406]
@@ -46,9 +59,11 @@ def build_transform(aug="none", train=True, size=IMG_SIZE):
 # Track A transfer strategies, following Topic 10's mode interpretation.
 # LR remains fixed at 1e-4 to preserve the existing experiment configuration.
 MODES = {
-    "scratch": (False, True),
-    "frozen": (True, False),
-    "finetune": (True, True),
+    #                pretrained, train_backbone, backbone_lr, head_lr
+    "scratch":        (False, True,  1e-3, 1e-3),
+    "frozen":         (True,  False, 0.0,  1e-3),
+    "finetune":       (True,  True,  1e-4, 1e-4),
+    "discriminative": (True,  True,  1e-4, 1e-3),
 }
 
 WEIGHTS = {
@@ -80,12 +95,22 @@ def keep_frozen_bn_in_eval(model):
             mod.eval()
 
 
-class DefectDataset(Dataset):
-    """Adapted from Topic 10: use fixed CSV rows, not its cached DataFrame.
+# Only training and validation images are cached. No held-out pixels are touched.
+_CACHE = {}
 
-    Return only (image, label) to preserve the existing training/validation
-    interfaces and avoid accidentally loading held-out samples.
-    """
+
+def cached(path):
+    if path not in _CACHE:
+        with Image.open(ROOT / path) as im:
+            img = im.convert("RGB")
+            _CACHE[path] = img.resize(
+                (CACHE_SIZE, CACHE_SIZE), Image.Resampling.BILINEAR
+            )
+    return _CACHE[path]
+
+
+class DefectDataset(Dataset):
+    """Equivalent to Topic 10's dataset, using portable CSV dictionaries."""
     def __init__(self, rows, transform):
         self.rows = rows
         self.tf = transform
@@ -95,13 +120,11 @@ class DefectDataset(Dataset):
 
     def __getitem__(self, i):
         r = self.rows[i]
-        with Image.open(ROOT / r["path"]) as im:
-            x = self.tf(im.convert("RGB"))
-        return x, int(r["label"])
+        return self.tf(cached(r["path"])), int(r["label"]), i
 
 
 def load_split(category):
-    csv_path = ROOT / "splits" / f"{category}_split_seed42.csv"
+    csv_path = ROOT / "outputs_topic10" / "splits" / f"{category}_split_seed{SPLIT_SEED}.csv"
     with csv_path.open(encoding="utf-8-sig", newline="") as f:
         rows = list(csv.DictReader(f))
     if not rows or len({r["path"] for r in rows}) != len(rows):
@@ -164,123 +187,199 @@ def train(category, mode, seed, epochs, batch_size, device, resume):
     set_seed(seed)
     groups = load_split(category)
     run_id = f"{category}_{mode}_seed{seed}"
-    out = ROOT / "outputs_baseline" / run_id
+    out = ROOT / "outputs_topic10" / run_id
     out.mkdir(parents=True, exist_ok=True)
     progress_file = out / "last.pt"
     best_file = out / "best.pt"
     status_file = out / "status.json"
     log_file = out / "history.csv"
 
-    # Same transfer-learning setup as Topic 10; uses the original ResNet-18.
-    pretrained, train_backbone = MODES[mode]
+    # Match Topic 10 (cell 24) exactly for mode-specific learning rates.
+    pretrained, train_backbone, lr_bb, lr_head = MODES[mode]
     model, head = build_model("resnet18", pretrained)
     head_ids = {id(p) for p in head.parameters()}
     for p in model.parameters():
         p.requires_grad = train_backbone or id(p) in head_ids
-    if mode == "frozen":
-        trainable_names = {name for name, p in model.named_parameters() if p.requires_grad}
-        assert trainable_names == {"fc.weight", "fc.bias"}, trainable_names
     model.to(device)
-    trainable_params = [p for p in model.parameters() if p.requires_grad]
-    n_trainable = count_params(model, trainable_only=True)
-    n_total = count_params(model)
+
+    param_groups = [{"params": list(head.parameters()), "lr": lr_head}]
+    bb = [p for p in model.parameters() if p.requires_grad and id(p) not in head_ids]
+    if bb:
+        param_groups.append({"params": bb, "lr": lr_bb})
+    opt = torch.optim.AdamW(param_groups, weight_decay=WEIGHT_DECAY)
+    sched = torch.optim.lr_scheduler.CosineAnnealingLR(opt, T_max=epochs)
+
+    trainable = count_params(model, trainable_only=True)
+    total = count_params(model)
     if mode == "frozen":
-        assert n_trainable == 1026, f"Unexpected frozen head size: {n_trainable}"
-    print(f"{run_id}: trainable={n_trainable:,} / total={n_total:,} parameters", flush=True)
-    optimizer = torch.optim.Adam(trainable_params, lr=1e-4)
-    criterion = nn.CrossEntropyLoss()
-    # Keep the ORIGINAL DataLoader shuffling/RNG behavior for comparability.
+        assert trainable == 1026
+    print(f"{run_id}: trainable={trainable:,}/{total:,}; backbone_lr={lr_bb}; head_lr={lr_head}", flush=True)
+
+    counts = np.bincount([int(r["label"]) for r in groups["train"]], minlength=2)
+    class_w = torch.tensor(
+        len(groups["train"]) / (2 * np.maximum(counts, 1)),
+        dtype=torch.float32, device=device
+    )
+    criterion = nn.CrossEntropyLoss(weight=class_w)
+
+    # Topic 10 gives each training loader an independent, seed-specific generator.
+    g = torch.Generator()
+    g.manual_seed(seed)
     train_loader = DataLoader(
-        DefectDataset(groups["train"], build_transform(train=True)),
-        batch_size=batch_size, shuffle=True, num_workers=0,
+        DefectDataset(groups["train"], build_transform("none", train=True)),
+        batch_size=batch_size, shuffle=True, generator=g, num_workers=0, drop_last=False,
     )
     val_loader = DataLoader(
-        DefectDataset(groups["val"], build_transform(train=False)),
-        batch_size=batch_size, shuffle=False, num_workers=0,
+        DefectDataset(groups["val"], build_transform("none", train=False)),
+        batch_size=batch_size, shuffle=False, num_workers=0, drop_last=False,
     )
 
-    start, best_auc, best_epoch = 1, -1.0, 0
+    # Both datasets are now small in-memory caches, just like the course notebook.
+    for subset in ("train", "val"):
+        for row in groups[subset]:
+            cached(row["path"])
+
+
+    # Historical results used a different protocol. Never reuse their checkpoints.
+    # Store scheduler, DataLoader generator and RNG states for exact resumption.
+    start, best_loss, best_epoch, bad = 1, float("inf"), 0, 0
+    best_auc = float("nan")
     history = []
+    finished = False
     if resume and progress_file.is_file():
         state = torch.load(progress_file, map_location=device, weights_only=False)
-        # Existing fine-tuning checkpoints were saved as mode='pretrained'.
-        saved_mode = "finetune" if state["mode"] == "pretrained" else state["mode"]
-        if (state["category"], saved_mode, state["seed"],
-                state["epochs"], state["batch_size"]) != (
-                category, mode, seed, epochs, batch_size):
-            raise ValueError(f"Incompatible checkpoint: {progress_file}")
+        expected = (PROTOCOL, category, mode, seed, epochs, batch_size)
+        actual = tuple(state.get(k) for k in
+                       ("protocol", "category", "mode", "seed", "epochs", "batch_size"))
+        if expected != actual:
+            raise ValueError(f"Incompatible protocol/checkpoint: {progress_file}")
         model.load_state_dict(state["model"])
-        optimizer.load_state_dict(state["optimizer"])
+        opt.load_state_dict(state["optimizer"])
+        sched.load_state_dict(state["scheduler"])
+        g.set_state(state["rng_loader"])
         start = state["epoch"] + 1
-        best_auc = state["best_val_auroc"]
-        best_epoch = state["best_epoch"]
-        history = state["history"]
+        best_loss, best_auc, best_epoch = (
+            state["best_val_loss"], state["best_val_auroc"], state["best_epoch"]
+        )
+        bad, history = state["bad_epochs"], state["history"]
+        finished = state["finished"]
         torch.set_rng_state(state["rng_torch"].cpu())
         np.random.set_state(state["rng_numpy"])
         random.setstate(state["rng_python"])
         if device.type == "cuda" and state["rng_cuda"] is not None:
             torch.cuda.set_rng_state_all(state["rng_cuda"])
-        print(f"RESUME {run_id} at epoch {start}", flush=True)
+        print(f"RESUME {run_id} from epoch {start}", flush=True)
+    elif not resume and progress_file.exists():
+        raise RuntimeError(
+            f"{progress_file} exists. --no-resume cannot overwrite an existing run. "
+            "Move the run directory elsewhere first."
+        )
 
-    if start > epochs:
-        print(f"COMPLETE {run_id}, best val AUROC={best_auc:.4f} at epoch {best_epoch}")
+    if finished or start > epochs:
+        print(f"COMPLETE {run_id}: best val loss={best_loss:.4f}, "
+              f"val AUROC={best_auc:.4f}, epoch={best_epoch}", flush=True)
         return
 
     print(f"START {run_id} train={len(groups['train'])}, val={len(groups['val'])}", flush=True)
     for epoch in range(start, epochs + 1):
         t0 = time.time()
         model.train()
-        if mode == "frozen":
-            # Same BatchNorm freeze helper as Topic 10.
+        if not train_backbone:
             keep_frozen_bn_in_eval(model)
-            assert all(not layer.training for layer in model.modules()
-                       if isinstance(layer, nn.modules.batchnorm._BatchNorm))
+
         loss_sum = 0.0
-        for x, y in train_loader:
+        for x, y, _ in train_loader:
             x, y = x.to(device), y.to(device)
-            optimizer.zero_grad(set_to_none=True)
+            opt.zero_grad(set_to_none=True)
             loss = criterion(model(x), y)
             loss.backward()
-            optimizer.step()
+            opt.step()
             loss_sum += float(loss.item()) * len(y)
-        val_loss, val_auc = validate(model, val_loader, criterion, device)
-        row = dict(epoch=epoch, train_loss=loss_sum / len(train_loader.dataset),
-                   val_loss=val_loss, val_auroc=val_auc, seconds=round(time.time() - t0, 2))
-        history.append(row)
-        if val_auc > best_auc:
-            best_auc, best_epoch = val_auc, epoch
-            torch.save({"model": model.state_dict(), "epoch": epoch,
-                        "val_auroc": val_auc, "category": category, "mode": mode}, best_file)
+        sched.step()
 
-        with log_file.open("w", newline="", encoding="utf-8") as f:
-            writer = csv.DictWriter(f, fieldnames=list(row))
+        # Match teacher's predict(): VALIDATION LOSS IS UNWEIGHTED.
+        # Training loss above is class-weighted, unlike validation loss.
+        model.eval()
+        ys, scores, val_total = [], [], 0.0
+        with torch.no_grad():
+            for x, y, _ in val_loader:
+                logits = model(x.to(device))
+                val_total += F.cross_entropy(
+                    logits, y.to(device), reduction="sum"
+                ).item()
+                scores.extend(torch.softmax(logits, dim=1)[:, 1].cpu().tolist())
+                ys.extend(y.tolist())
+        val_loss = val_total / len(val_loader.dataset)
+        val_auc = float(roc_auc_score(ys, scores))
+
+        row = dict(
+            epoch=epoch, train_loss=loss_sum / len(train_loader.dataset),
+            val_loss=val_loss, val_auroc=val_auc,
+            seconds=round(time.time() - t0, 2)
+        )
+        history.append(row)
+        # Teacher's checkpoint selection and stopping: best val loss,
+        # improvement > 1e-4, patience 6 (rather than AUROC-selected epoch).
+        if val_loss < best_loss - 1e-4:
+            best_loss, best_auc, best_epoch, bad = val_loss, val_auc, epoch, 0
+            best_state = {
+                "protocol": PROTOCOL, "model": model.state_dict(),
+                "epoch": epoch, "val_loss": val_loss, "val_auroc": val_auc,
+                "category": category, "mode": mode, "seed": seed,
+            }
+            tmp_best = out / "best.tmp"
+            torch.save(best_state, tmp_best)
+            os.replace(tmp_best, best_file)
+        else:
+            bad += 1
+
+        with log_file.open("w", newline="", encoding="utf-8") as fp:
+            writer = csv.DictWriter(fp, fieldnames=list(row))
             writer.writeheader()
             writer.writerows(history)
-        # Checkpoint after each epoch. Resume restores RNG and optimizer state.
-        state = dict(category=category, mode=mode, seed=seed, epochs=epochs,
-                     batch_size=batch_size, epoch=epoch, best_val_auroc=best_auc,
-                     best_epoch=best_epoch, history=history, model=model.state_dict(),
-                     optimizer=optimizer.state_dict(), rng_torch=torch.get_rng_state(),
-                     rng_numpy=np.random.get_state(), rng_python=random.getstate(),
-                     rng_cuda=torch.cuda.get_rng_state_all() if device.type == "cuda" else None)
-        temp_ckpt = out / "last.tmp"
-        torch.save(state, temp_ckpt)
-        os.replace(temp_ckpt, progress_file)
-        write_json_atomic(status_file, dict(category=category, mode=mode, seed=seed,
-            epoch=epoch, epochs=epochs, best_val_auroc=best_auc, best_epoch=best_epoch,
-            status="complete" if epoch == epochs else "running",
-            train_count=len(groups["train"]), val_count=len(groups["val"]),
-            git_commit=git_hash(), device=str(device), elapsed_epoch_seconds=row["seconds"],
-            optimizer="Adam", lr=1e-4, image_size=224, batch_size=batch_size,
-            split_seed=42, augmentation="none",
-            trainable_parameters=n_trainable, total_parameters=n_total,
-            backbone_frozen=(mode == "frozen")))
-        print(f"{run_id} epoch {epoch:02d}/{epochs} | "
-              f"train loss {row['train_loss']:.4f} | val loss {val_loss:.4f} | "
-              f"val AUROC {val_auc:.4f} | best {best_auc:.4f} | {row['seconds']}s",
-              flush=True)
-    print(f"DONE {run_id}: best validation AUROC={best_auc:.4f} (epoch {best_epoch})", flush=True)
 
+        finished = bad >= PATIENCE or epoch == epochs
+        state = dict(
+            protocol=PROTOCOL, category=category, mode=mode, seed=seed,
+            epochs=epochs, batch_size=batch_size, epoch=epoch,
+            best_val_loss=best_loss, best_val_auroc=best_auc,
+            best_epoch=best_epoch, bad_epochs=bad, finished=finished,
+            history=history, model=model.state_dict(),
+            optimizer=opt.state_dict(), scheduler=sched.state_dict(),
+            rng_loader=g.get_state(), rng_torch=torch.get_rng_state(),
+            rng_numpy=np.random.get_state(), rng_python=random.getstate(),
+            rng_cuda=torch.cuda.get_rng_state_all() if device.type == "cuda" else None,
+        )
+        tmp_ckpt = out / "last.tmp"
+        torch.save(state, tmp_ckpt)
+        os.replace(tmp_ckpt, progress_file)
+        write_json_atomic(status_file, dict(
+            protocol=PROTOCOL, category=category, mode=mode, seed=seed,
+            epoch=epoch, epochs=epochs, status="complete" if finished else "running",
+            best_val_loss=best_loss, best_val_auroc=best_auc,
+            best_epoch=best_epoch, bad_epochs=bad, patience=PATIENCE,
+            train_count=len(groups["train"]), val_count=len(groups["val"]),
+            optimizer="AdamW", weight_decay=WEIGHT_DECAY,
+            backbone_lr=lr_bb, head_lr=lr_head,
+            lr_schedule="CosineAnnealingLR",
+            train_loss="weighted_cross_entropy",
+            val_loss="unweighted_cross_entropy",
+            selection="lowest_validation_loss",
+            image_size=IMG_SIZE, cache_size=CACHE_SIZE,
+            batch_size=batch_size, split_seed=SPLIT_SEED,
+            augmentation="none", trainable_parameters=trainable,
+            total_parameters=total,
+            git_commit=git_hash(), device=str(device),
+            elapsed_epoch_seconds=row["seconds"]
+        ))
+        print(f"{run_id} epoch {epoch:02d}/{epochs} "
+              f"train loss {row['train_loss']:.4f} "
+              f"val loss {val_loss:.4f} val AUROC {val_auc:.4f} "
+              f"best loss {best_loss:.4f} bad {bad}/{PATIENCE}", flush=True)
+        if finished:
+            break
+    print(f"DONE {run_id}: best validation loss={best_loss:.4f}; "
+          f"AUROC at best epoch={best_auc:.4f} (epoch {best_epoch})", flush=True)
 
 def main():
     p = argparse.ArgumentParser(description=__doc__)
