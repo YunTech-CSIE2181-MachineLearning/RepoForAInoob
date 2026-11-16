@@ -1,140 +1,84 @@
+"""Create the Track A split using the *same two-stage procedure* as Topic 10.
+
+The old 'splits/' files (and outputs_baseline/) are deliberately untouched.
+This rerun writes to outputs_topic10/splits/, as in the course notebook.
+"""
 from pathlib import Path
+
 import pandas as pd
 from sklearn.model_selection import train_test_split
 
 ROOT = Path(__file__).resolve().parent.parent
 DATA_ROOT = ROOT / "data" / "mvtec_ad"
-SPLIT_DIR = ROOT / "splits"
+OUT_DIR = ROOT / "outputs_topic10"
+SPLIT_DIR = OUT_DIR / "splits"
 
-# Fixed values from the submitted proposal.
 CATEGORIES = ["carpet", "bottle", "transistor"]
-SEED = 42
-HELDOUT_RATIO = 0.5
-VAL_RATIO = 0.2
+SPLIT_SEED = 42
 
 
-def ensure_validation_coverage(train, val):
-    """Cover every defect type in val without changing held-out or split sizes.
+def build_split(root, category, seed=SPLIT_SEED, heldout_frac=0.5, val_frac=0.2):
+    """Match Topic 10 cell 9: 50/50 stratified by defect type, then 20% val by label.
 
-    Only move samples between train and val. A sample from an unrepresented
-    defect type replaces a sample from an overrepresented type of the same
-    binary class whenever possible. This keeps Good/Defect counts unchanged.
+    Relative paths are used for portable CSVs; this does not change membership.
+    No extra validation-coverage swapping (unlike our older splitter).
     """
-    dev = pd.concat([train, val])
-    train, val = train.copy(), val.copy()
-    targets = sorted(dev["defect_type"].unique())
-
-    for missing_type in targets:
-        if (val["defect_type"] == missing_type).any():
-            continue
-
-        candidates = train[train["defect_type"] == missing_type].sort_values("path")
-        if candidates.empty:
-            raise ValueError(f"No training image available for {missing_type}")
-        incoming = candidates.index[0]
-        label = int(train.loc[incoming, "label"])
-
-        # Do not eliminate any existing type from validation.
-        counts = val["defect_type"].value_counts()
-        donors = val[val["defect_type"].map(counts) > 1]
-        same_label = donors[donors["label"] == label]
-        if not same_label.empty:
-            donors = same_label
-        if donors.empty:
-            raise ValueError("No safe validation donor; inspect split manually")
-
-        # Choose the type most above its proportional expected validation count.
-        expected = dev["defect_type"].value_counts() * (len(val) / len(dev))
-        donor_type = sorted(
-            donors["defect_type"].unique(),
-            key=lambda t: (-(counts[t] - expected[t]), t),
-        )[0]
-        outgoing = donors[donors["defect_type"] == donor_type].sort_values("path").index[0]
-        train = pd.concat([train.drop(index=incoming), val.loc[[outgoing]]])
-        val = pd.concat([val.drop(index=outgoing), candidates.loc[[incoming]]])
-
-    if set(val["defect_type"]) != set(targets):
-        raise AssertionError("Incomplete validation defect-type coverage")
-    return train, val
-
-
-def prepare_category(category):
-    test_dir = DATA_ROOT / category / "test"
-    mask_dir = DATA_ROOT / category / "ground_truth"
-    if not test_dir.is_dir():
-        raise FileNotFoundError(f"Missing dataset directory: {test_dir}")
-
+    csv = SPLIT_DIR / f"{category}_split_seed{seed}.csv"
     rows = []
-    for defect_dir in sorted(test_dir.iterdir()):
-        if not defect_dir.is_dir():
+    for dt_dir in sorted((Path(root) / category / "test").iterdir()):
+        if not dt_dir.is_dir():
             continue
-        defect_type = defect_dir.name
-        for image_path in sorted(defect_dir.glob("*.png")):
-            label = int(defect_type != "good")
-            mask_path = ""
-            if label:
-                mask = mask_dir / defect_type / f"{image_path.stem}_mask.png"
-                if not mask.is_file():
-                    raise FileNotFoundError(f"Missing defect mask: {mask}")
-                mask_path = mask.relative_to(ROOT).as_posix()
-            rows.append({
-                "category": category,
-                "path": image_path.relative_to(ROOT).as_posix(),
-                "defect_type": defect_type,
-                "label": label,
-                "mask": mask_path,
-            })
-
+        for f in sorted(dt_dir.glob("*.png")):
+            m = Path(root) / category / "ground_truth" / dt_dir.name / f"{f.stem}_mask.png"
+            rows.append(dict(
+                category=category,
+                path=f.relative_to(ROOT).as_posix(),
+                defect_type=dt_dir.name,
+                label=int(dt_dir.name != "good"),
+                mask=m.relative_to(ROOT).as_posix() if m.exists() else "",
+            ))
     df = pd.DataFrame(rows)
-    if df.empty:
-        raise ValueError(f"No images for {category}")
+    if df.empty or not df["path"].is_unique:
+        raise ValueError(f"Missing or duplicate data for {category}")
 
-    # Stage 1: retain the original 50/50 defect-type-stratified held-out split.
-    dev, heldout = train_test_split(
-        df, test_size=HELDOUT_RATIO,
-        stratify=df["defect_type"], random_state=SEED,
+    # These three lines intentionally mirror Topic 10's build_split().
+    dev, held = train_test_split(
+        df, test_size=heldout_frac, stratify=df["defect_type"], random_state=seed
     )
-
-    # Stage 2: preserve the original split, correcting only missing types in val.
-    train, val = train_test_split(
-        dev, test_size=VAL_RATIO,
-        stratify=dev["label"], random_state=SEED,
+    tr, va = train_test_split(
+        dev, test_size=val_frac, stratify=dev["label"], random_state=seed
     )
-    train, val = ensure_validation_coverage(train, val)
-
     df["split"] = ""
-    df.loc[train.index, "split"] = "train"
-    df.loc[val.index, "split"] = "val"
-    df.loc[heldout.index, "split"] = "heldout"
+    df.loc[tr.index, "split"] = "train"
+    df.loc[va.index, "split"] = "val"
+    df.loc[held.index, "split"] = "heldout"
 
     assert df["split"].ne("").all()
-    assert df["path"].is_unique
-    assert len(train) + len(val) + len(heldout) == len(df)
-
-    output = SPLIT_DIR / f"{category}_split_seed{SEED}.csv"
-    if output.exists():
-        old = pd.read_csv(output).fillna("")
-        new = df.fillna("")
-        if not old.equals(new):
+    assert len(tr) + len(va) + len(held) == len(df)
+    if csv.exists():
+        existing = pd.read_csv(csv).fillna("")
+        if not existing.equals(df.fillna("")):
             raise RuntimeError(
-                f"{output.name} differs from the fixed split. "
-                "Will not overwrite. Check GitHub and local files."
+                f"{csv} does not match the reproducible Topic 10 split. "
+                "Refusing to overwrite; inspect the existing CSV first."
             )
-        print(f"{category}: fixed CSV verified")
+        print(f"{category}: Topic 10 split verified")
     else:
-        df.to_csv(output, index=False, encoding="utf-8")
-        print(f"{category}: created {output.name}")
-
-    print(f"  Total={len(df)} Train={len(train)} Val={len(val)} Held-out={len(heldout)}")
+        df.to_csv(csv, index=False)
+        print(f"{category}: created {csv.relative_to(ROOT)}")
+    print(f"  Total={len(df)} Train={len(tr)} Val={len(va)} Held-out={len(held)}")
     print(pd.crosstab(df["defect_type"], df["split"]))
     print()
+    return df
 
 
 def main():
     SPLIT_DIR.mkdir(parents=True, exist_ok=True)
     for category in CATEGORIES:
-        prepare_category(category)
-    print("All three fixed splits verified.")
+        if not (DATA_ROOT / category / "test").is_dir():
+            raise FileNotFoundError(f"MVTec AD missing: {DATA_ROOT / category / 'test'}")
+        build_split(DATA_ROOT, category)
+    print("All three Topic 10 splits are ready (old splits/ preserved).")
 
 
 if __name__ == "__main__":
