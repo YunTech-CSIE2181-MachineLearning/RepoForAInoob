@@ -21,6 +21,7 @@ This repository contains a reproducible, ResNet-18-based comparison of **trainin
 | [`docs/TOPIC10_CODE_MAP.md`](docs/TOPIC10_CODE_MAP.md) | Detailed function-to-notebook section mapping and important implementation differences. |
 | `pyproject.toml`, `uv.lock`, `.python-version` | Python dependencies and locked environment. |
 | `data/mvtec_ad/` | **Local-only** MVTec AD images, intentionally excluded from Git. |
+| [`environment_check/`](environment_check/) | One-command Windows setup, CUDA compatibility check, and ResNet-18 smoke training. |
 
 ## Requirements and data
 
