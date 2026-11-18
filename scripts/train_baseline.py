@@ -41,12 +41,14 @@ PATIENCE = 6
 WEIGHT_DECAY = 0.05
 PROTOCOL = "topic10-adamw-cosine-weighted-loss-earlystop-v1"
 # Same ImageNet normalization and baseline (no-augmentation) transform as Topic 10.
+# Topic 10 §§1, 4 — configuration, input size and ImageNet normalization.
 IMG_SIZE = 224
 IMAGENET_MEAN = [0.485, 0.456, 0.406]
 IMAGENET_STD = [0.229, 0.224, 0.225]
 # Keep only "none" here: augmentation experiments have their own planned settings.
 AUGMENTATIONS = {"none": ([], [])}
 
+# Topic 10 §4 — image preprocessing and data augmentation interface.
 def build_transform(aug="none", train=True, size=IMG_SIZE):
     pil_ops, tensor_ops = [], []
     if train:
@@ -58,6 +60,7 @@ def build_transform(aug="none", train=True, size=IMG_SIZE):
 
 # Exact mode-specific learning rates from Topic 10's transfer strategy comparison.
 # This intentionally changes the previous fixed-LR protocol; old outputs are kept.
+# Topic 10 §§6–7 — strategies: scratch, frozen features and fine-tuning.
 MODES = {
     #                pretrained, train_backbone, backbone_lr, head_lr
     "scratch":        (False, True,  1e-3, 1e-3),
@@ -66,6 +69,7 @@ MODES = {
     "discriminative": (True,  True,  1e-4, 1e-3),
 }
 
+# Topic 10 §5 — ImageNet pretrained backbone definitions.
 WEIGHTS = {
     "resnet18":          models.ResNet18_Weights.IMAGENET1K_V1,
     "resnet50":          models.ResNet50_Weights.IMAGENET1K_V2,
@@ -74,21 +78,24 @@ WEIGHTS = {
     "vgg16":             models.VGG16_Weights.IMAGENET1K_V1,
 }
 
+# Topic 10 §5 — initialize backbone and replace the classification head.
 def build_model(arch="resnet18", pretrained=True, num_classes=2):
-    # 回傳 (model, head)：head 是新換上去、要從零學的分類層所在模組
+    # Return (model, head); the new classification head starts from random weights.
     weights = WEIGHTS[arch] if pretrained else None
     m = getattr(models, arch)(weights=weights)
     if arch.startswith("resnet"):
         m.fc = nn.Linear(m.fc.in_features, num_classes)
         head = m.fc
-    else:  # mobilenet / efficientnet / vgg 的分類器都在 m.classifier，最後一個是 Linear
+    else:  # For MobileNet/EfficientNet/VGG, the final Linear layer is in classifier.
         m.classifier[-1] = nn.Linear(m.classifier[-1].in_features, num_classes)
         head = m.classifier
     return m, head
 
+# Topic 10 §5 — number of trainable model parameters.
 def count_params(m, trainable_only=False):
     return sum(p.numel() for p in m.parameters() if p.requires_grad or not trainable_only)
 
+# Topic 10 §6 — keep frozen BatchNorm statistics fixed.
 def keep_frozen_bn_in_eval(model):
     for mod in model.modules():
         if isinstance(mod, nn.modules.batchnorm._BatchNorm) and not any(p.requires_grad for p in mod.parameters()):
@@ -96,6 +103,7 @@ def keep_frozen_bn_in_eval(model):
 
 
 # Only training and validation images are cached. No held-out pixels are touched.
+# Topic 10 §4 — resized image cache (training/validation only).
 _CACHE = {}
 
 
@@ -109,6 +117,7 @@ def cached(path):
     return _CACHE[path]
 
 
+# Topic 10 §4 — dataset wrapper and transforms.
 class DefectDataset(Dataset):
     """Equivalent to Topic 10's dataset, using portable CSV dictionaries."""
     def __init__(self, rows, transform):
@@ -123,6 +132,7 @@ class DefectDataset(Dataset):
         return self.tf(cached(r["path"])), int(r["label"]), i
 
 
+# Topic 10 §3 — read the fixed split (project-specific held-out isolation).
 def load_split(category):
     csv_path = ROOT / "outputs_topic10" / "splits" / f"{category}_split_seed{SPLIT_SEED}.csv"
     with csv_path.open(encoding="utf-8-sig", newline="") as f:
@@ -144,8 +154,9 @@ def load_split(category):
     return result
 
 
+# Topic 10 §1 — reproducible seeds.
 def set_seed(seed: int):
-    # 固定所有亂數來源：Python / NumPy / PyTorch(CPU+GPU)
+    # Set all random seeds: Python, NumPy, PyTorch CPU and CUDA.
     random.seed(seed)
     np.random.seed(seed)
     torch.manual_seed(seed)
@@ -154,6 +165,7 @@ def set_seed(seed: int):
     torch.backends.cudnn.benchmark = False
 
 
+# Topic 10 §12 — record experiment provenance.
 def git_hash():
     try:
         return subprocess.check_output(
@@ -164,12 +176,14 @@ def git_hash():
         return "unknown"
 
 
+# Project extension — safely save metadata after each epoch.
 def write_json_atomic(path, obj):
     tmp = path.with_suffix(path.suffix + ".tmp")
     tmp.write_text(json.dumps(obj, indent=2, ensure_ascii=False), encoding="utf-8")
     os.replace(tmp, path)
 
 
+# Topic 10 §§6–7 — training, evaluation, early stopping, strategy comparison.
 def train(category, mode, seed, epochs, batch_size, device, resume):
     set_seed(seed)
     groups = load_split(category)
@@ -368,6 +382,7 @@ def train(category, mode, seed, epochs, batch_size, device, resume):
     print(f"DONE {run_id}: best validation loss={best_loss:.4f}; "
           f"AUROC at best epoch={best_auc:.4f} (epoch {best_epoch})", flush=True)
 
+# Project entry point — CLI for category/mode/seed runs (Topic 10 §7).
 def main():
     p = argparse.ArgumentParser(description=__doc__)
     p.add_argument("--mode",

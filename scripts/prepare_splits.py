@@ -13,10 +13,12 @@ DATA_ROOT = ROOT / "data" / "mvtec_ad"
 OUT_DIR = ROOT / "outputs_topic10"
 SPLIT_DIR = OUT_DIR / "splits"
 
+# Topic 10 §§1–2 — selected project categories and split seed.
 CATEGORIES = ["carpet", "bottle", "transistor"]
 SPLIT_SEED = 42
 
 
+# Topic 10 §3 — two-stage stratified Track A split.
 def build_split(root, category, seed=SPLIT_SEED, heldout_frac=0.5, val_frac=0.2):
     """Match Topic 10 cell 9: 50/50 stratified by defect type, then 20% val by label.
 
@@ -72,6 +74,7 @@ def build_split(root, category, seed=SPLIT_SEED, heldout_frac=0.5, val_frac=0.2)
     return df
 
 
+# Project extension — verify/copy all three split CSVs without overwriting.
 def main():
     SPLIT_DIR.mkdir(parents=True, exist_ok=True)
     for category in CATEGORIES:
