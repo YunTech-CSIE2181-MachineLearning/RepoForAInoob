@@ -1,0 +1,7 @@
+# Temporary tools and environment installed by the local bootstrapper.
+.venv/
+.tools/
+uv.lock
+report.json
+__pycache__/
+*.pyc

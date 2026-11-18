@@ -1,0 +1,19 @@
+[project]
+name = "cise2181-environment-check"
+version = "0.1.0"
+description = "Minimal isolated CUDA and ResNet-18 smoke test for the CISE2181 MVTec AD project"
+requires-python = ">=3.12,<3.13"
+dependencies = [
+    # Keep these aligned with the Windows CUDA entries in the repository uv.lock.
+    "torch==2.11.0+cu128",
+    "torchvision==0.26.0+cu128",
+]
+
+[tool.uv.sources]
+torch = { index = "pytorch-cu128" }
+torchvision = { index = "pytorch-cu128" }
+
+[[tool.uv.index]]
+name = "pytorch-cu128"
+url = "https://download.pytorch.org/whl/cu128"
+explicit = true
