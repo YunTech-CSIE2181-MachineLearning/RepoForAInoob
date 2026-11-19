@@ -5,14 +5,25 @@ Create a tiny isolated Python environment and verify actual CUDA training.
 No MVTec data required. Does not modify the root project's .venv, uv.lock,
 training scripts, experiment CSVs, or checkpoints.
 The official uv installer is only downloaded if uv is not already available.
+If uv is only available inside this repository, optionally make it available from
+new PowerShell/cmd/VS Code terminals via the current user PATH (no admin rights).
 .PARAMETER Full
 Also install the repository's full locked project environment (optional).
 .PARAMETER DownloadWeights
 Also fetch/load ImageNet ResNet-18 pretrained weights (optional; internet required).
+.PARAMETER AddUvToPath
+Copy uv into a stable per-user folder and add it to the user PATH without prompting.
+.PARAMETER NoPathPrompt
+Skip the interactive PATH question; useful for unattended setup.
+.PARAMETER PathOnly
+Configure uv accessibility without installing Python, packages, or running GPU tests.
 #>
 param(
     [switch]$Full,
-    [switch]$DownloadWeights
+    [switch]$DownloadWeights,
+    [switch]$AddUvToPath,
+    [switch]$NoPathPrompt,
+    [switch]$PathOnly
 )
 
 $ErrorActionPreference = "Stop"
@@ -29,6 +40,105 @@ function Invoke-Checked([string]$Executable, [string[]]$CommandArguments) {
     }
 }
 
+# Use the user-level PATH rather than setx or the machine-level PATH.
+# Keeping uv outside the cloned repository means moving/deleting the repo will
+# not break a PATH entry that the user deliberately opted into.
+function Test-PathContains([string]$PathText, [string]$Directory) {
+    $Expected = [System.IO.Path]::GetFullPath($Directory).TrimEnd('\', '/')
+    foreach ($Part in ($PathText -split ';')) {
+        $Item = [Environment]::ExpandEnvironmentVariables($Part.Trim().Trim('"'))
+        if (-not $Item) { continue }
+        try {
+            $Actual = [System.IO.Path]::GetFullPath($Item).TrimEnd('\', '/')
+            if ($Actual -ieq $Expected) { return $true }
+        } catch {
+            # Ignore malformed/legacy PATH entries; never remove them.
+        }
+    }
+    return $false
+}
+
+function Offer-UserUvPath([string]$UvExecutable, [bool]$AddWithoutAsking, [bool]$SkipQuestion) {
+    $OnPath = Get-Command uv -CommandType Application -ErrorAction SilentlyContinue
+    if ($null -ne $OnPath) {
+        Write-Host "uv is already on PATH: $($OnPath.Source)"
+        return
+    }
+
+    Write-Host "uv is working, but 'uv' is not a command in new terminals yet."
+    Write-Host "Current executable: $UvExecutable"
+    Write-Host "An optional permanent setup copies uv/uvx to your local user profile"
+    Write-Host "and adds ONLY that folder to your USER PATH (no administrator rights)."
+    Write-Host "The repository and system-wide PATH are not modified by this choice."
+
+    if ($SkipQuestion -and -not $AddWithoutAsking) {
+        Write-Host "User PATH change skipped (-NoPathPrompt)."
+        return
+    }
+
+    if (-not $AddWithoutAsking) {
+        if ([Console]::IsInputRedirected) {
+            Write-Host "Noninteractive terminal: skipping PATH change. Pass -AddUvToPath to opt in."
+            return
+        }
+        try {
+            $Answer = Read-Host "Make uv available in future PowerShell/cmd/VS Code terminals? [y/N]"
+        } catch {
+            Write-Host "Unable to read input; skipping optional PATH change."
+            return
+        }
+        if ($null -eq $Answer -or $Answer.Trim() -notmatch '^(?i:y|yes)$') {
+            Write-Host "Skipped. uv remains usable at: $UvExecutable"
+            return
+        }
+    }
+
+    try {
+        $LocalAppData = [Environment]::GetFolderPath('LocalApplicationData')
+        if ([string]::IsNullOrWhiteSpace($LocalAppData)) {
+            throw 'Windows LocalApplicationData folder is unavailable.'
+        }
+        $PermanentDir = Join-Path $LocalAppData 'Programs\uv'
+        New-Item -ItemType Directory -Path $PermanentDir -Force | Out-Null
+
+        $PermanentUv = Join-Path $PermanentDir 'uv.exe'
+        if (-not (Test-Path -LiteralPath $PermanentUv)) {
+            Copy-Item -LiteralPath $UvExecutable -Destination $PermanentUv -ErrorAction Stop
+        } else {
+            Write-Host "Reusing existing per-user uv: $PermanentUv"
+        }
+        $UvXSource = Join-Path (Split-Path -Parent $UvExecutable) 'uvx.exe'
+        $PermanentUvx = Join-Path $PermanentDir 'uvx.exe'
+        if ((Test-Path -LiteralPath $UvXSource) -and -not (Test-Path -LiteralPath $PermanentUvx)) {
+            Copy-Item -LiteralPath $UvXSource -Destination $PermanentUvx -ErrorAction Stop
+        }
+        Invoke-Checked $PermanentUv @('--version')
+
+        $UserPath = [Environment]::GetEnvironmentVariable('Path', [EnvironmentVariableTarget]::User)
+        if (-not (Test-PathContains $UserPath $PermanentDir)) {
+            $NewPath = if ([string]::IsNullOrWhiteSpace($UserPath)) {
+                $PermanentDir
+            } else {
+                $UserPath.TrimEnd(';') + ';' + $PermanentDir
+            }
+            [Environment]::SetEnvironmentVariable('Path', $NewPath, [EnvironmentVariableTarget]::User)
+            Write-Host "[PASS] Added to user PATH: $PermanentDir" -ForegroundColor Green
+        } else {
+            Write-Host "[PASS] User PATH already contains: $PermanentDir" -ForegroundColor Green
+        }
+        # This applies only to this script's process and its children. The
+        # parent PowerShell that launched run.cmd cannot be changed by a child.
+        if (-not (Test-PathContains $env:Path $PermanentDir)) {
+            $env:Path = "$PermanentDir;$env:Path"
+        }
+        Write-Host "Open a NEW PowerShell/cmd/VS Code terminal, then run: uv --version"
+        Write-Host "Your currently open calling terminal may still need to be restarted."
+    } catch {
+        Write-Warning "Optional user PATH setup did not succeed: $($_.Exception.Message)"
+        Write-Host "The normal GPU/environment setup can continue using: $UvExecutable"
+    }
+}
+
 $RepoRoot = (Resolve-Path (Join-Path $PSScriptRoot "..")).Path
 $LocalUvDir = Join-Path $PSScriptRoot ".tools\uv"
 $LocalUvExe = Join-Path $LocalUvDir "uv.exe"
@@ -41,7 +151,7 @@ try {
         $UvExe = $LocalUvExe
         Write-Host "Using local uv: $UvExe"
     } else {
-        $AvailableUv = Get-Command uv -ErrorAction SilentlyContinue
+        $AvailableUv = Get-Command uv -CommandType Application -ErrorAction SilentlyContinue
         if ($null -ne $AvailableUv) {
             $UvExe = $AvailableUv.Source
             Write-Host "Using existing uv: $UvExe"
@@ -67,6 +177,18 @@ try {
         }
     }
     Invoke-Checked $UvExe @("--version")
+
+    if ($AddUvToPath -and $NoPathPrompt) {
+        throw "Choose either -AddUvToPath or -NoPathPrompt, not both."
+    }
+    Write-Step "Optional: make uv available in future terminals"
+    Offer-UserUvPath -UvExecutable $UvExe -AddWithoutAsking ([bool]$AddUvToPath) -SkipQuestion ([bool]$NoPathPrompt)
+
+    if ($PathOnly) {
+        Write-Host "`n[PASS] uv PATH configuration step completed." -ForegroundColor Green
+        Write-Host "Open a NEW terminal before running: uv --version"
+        exit 0
+    }
 
     Write-Step "Install/check Python 3.12"
     Invoke-Checked $UvExe @("python", "install", "3.12")

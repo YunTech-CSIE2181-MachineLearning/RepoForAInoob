@@ -24,6 +24,13 @@ installer if missing), downloads Python 3.12 if needed, and installs only
 4. Trains a randomly initialized **ResNet-18** for **two optimizer steps** on synthetic 224×224 images (batch size 2).
 5. Writes **`environment_check/report.json`** containing the result and any error.
 
+If `uv` was installed only in `environment_check/.tools/uv/`, the launcher
+asks whether to copy `uv` and `uvx` into a stable per-user folder and add it to
+**your user PATH**. The default answer is **No**. You do not need administrator
+rights. When you answer Yes, **open a new terminal** after installation; an
+already-open PowerShell/VS Code terminal does not automatically refresh PATH.
+Moving or deleting the cloned repository will not break this per-user install.
+
 No MVTec images are required or opened. No existing 27 experiment results or
 `outputs_topic10/splits/` are modified. The default command does **not** touch
 the root `.venv` or `uv.lock`.
@@ -50,6 +57,38 @@ need pretrained weights.
 `-Full` uses `uv sync --frozen` on the **root project** and builds/updates
 `RepoForAInoob/.venv`. Use it only when you want the complete environment for
 `prepare_splits.py`, `train_baseline.py`, and the course notebook.
+
+## Make the `uv` command available in new terminals
+
+When the local installer finishes downloading/validating uv, it offers:
+
+```text
+Make uv available in future PowerShell/cmd/VS Code terminals? [y/N]:
+```
+
+- **`Y`** — copies `uv.exe` and `uvx.exe` to `%LOCALAPPDATA%\Programs\uv`, and adds that stable folder to the **current user's** PATH. The operation is opt-in; the system PATH is unchanged.
+- **`N` or Enter** — keeps using the local `environment_check/.tools/uv/uv.exe` during this setup; no persistent PATH modifications.
+- If uv was already found on PATH, no prompt is needed.
+- For scripting, use `-NoPathPrompt` or `-AddUvToPath` explicitly.
+- If you have already run `-Full`, use `-PathOnly` to answer the PATH question without a second PyTorch installation or GPU test.
+
+After opting in, **close and reopen** PowerShell, cmd, or the VS Code integrated terminal before running:
+
+```powershell
+uv --version
+uv run python scripts/verify_results.py
+```
+
+For immediate use in an already-open PowerShell window, either restart it or call
+the executable directly:
+
+```powershell
+& "$env:LOCALAPPDATA\Programs\uv\uv.exe" run python scripts/verify_results.py
+```
+
+Because `run.cmd` launches a child PowerShell, it cannot update the PATH of
+its already-running parent terminal. **Do not use `setx PATH` to work around
+this**, as it may truncate or damage long PATH values.
 
 ## Files
 
